@@ -28,7 +28,7 @@ jobs:
           curl --fail --location --retry 5 --retry-all-errors "$source_url" --output transport/HL20_aero.dml
           gzip --best --no-name --stdout transport/HL20_aero.dml > transport/HL20_aero.dml.gz
           base64 --wrap=0 transport/HL20_aero.dml.gz > transport/HL20_aero.dml.gz.b64
-          split --bytes=16000 --numeric-suffixes=0 --suffix-length=3 transport/HL20_aero.dml.gz.b64 transport/chunks/part-
+          split --bytes=6000 --numeric-suffixes=0 --suffix-length=3 transport/HL20_aero.dml.gz.b64 transport/chunks/part-
           sha256sum transport/HL20_aero.dml transport/HL20_aero.dml.gz transport/HL20_aero.dml.gz.b64 transport/chunks/* > transport/SHA256SUMS
           wc -c -l transport/HL20_aero.dml > transport/SOURCE_SIZE.txt
           printf '%s\n' "$source_url" > transport/SOURCE_URL.txt
@@ -42,5 +42,5 @@ jobs:
           git config user.name 'hl20-transport-bot'
           git config user.email 'actions@users.noreply.github.com'
           git add transport
-          git commit -m 'Add temporary HL-20 source transport chunks'
+          git commit -m 'Refresh temporary HL-20 source transport chunks'
           git push origin "HEAD:${{ github.head_ref }}"
