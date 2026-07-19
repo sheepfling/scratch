@@ -1,0 +1,46 @@
+name: HL20 source transport
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  fetch-and-split:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out transport branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Fetch, verify, compress, and split public HL-20 DAVE-ML source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_url='https://raw.githubusercontent.com/DyadLang/DyadDemos/9e10c296a173403bdfc993ac626759b6e6f77b2e/HL20Demo/assets/shared/HL20_aero.dml'
+          rm -rf transport
+          mkdir -p transport/chunks
+          curl --fail --location --retry 5 --retry-all-errors "$source_url" --output transport/HL20_aero.dml
+          gzip --best --no-name --stdout transport/HL20_aero.dml > transport/HL20_aero.dml.gz
+          base64 --wrap=0 transport/HL20_aero.dml.gz > transport/HL20_aero.dml.gz.b64
+          split --bytes=16000 --numeric-suffixes=0 --suffix-length=3 transport/HL20_aero.dml.gz.b64 transport/chunks/part-
+          sha256sum transport/HL20_aero.dml transport/HL20_aero.dml.gz transport/HL20_aero.dml.gz.b64 transport/chunks/* > transport/SHA256SUMS
+          wc -c -l transport/HL20_aero.dml > transport/SOURCE_SIZE.txt
+          printf '%s\n' "$source_url" > transport/SOURCE_URL.txt
+          printf '%s\n' 'Temporary transport artifacts for local reconstruction; public source, pinned commit.' > transport/README.txt
+          rm transport/HL20_aero.dml transport/HL20_aero.dml.gz transport/HL20_aero.dml.gz.b64
+
+      - name: Commit transport chunks to the pull-request branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'hl20-transport-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add transport
+          git commit -m 'Add temporary HL-20 source transport chunks'
+          git push origin "HEAD:${{ github.head_ref }}"
