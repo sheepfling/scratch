@@ -1,0 +1,89 @@
+name: Aerospace source transport
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  collect-sources:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out transport branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Collect exact F-16 and OpenAP source data
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output work
+
+          # Exact F-16 S-119 source tree used for the public Aetherion implementation.
+          aetherion_commit='b0efbc0a6ba5a6d5b4f845d703712c9946c78cde'
+          git clone --quiet --filter=blob:none --no-checkout https://github.com/onurtuncer/Aetherion.git work/aetherion
+          git -C work/aetherion checkout --quiet "$aetherion_commit"
+          test "$(git -C work/aetherion rev-parse HEAD)" = "$aetherion_commit"
+          mkdir -p work/f16-aetherion
+          cp -a work/aetherion/data/F16_S119_source work/f16-aetherion/
+          printf '%s\n' "$aetherion_commit" > work/f16-aetherion/SOURCE_COMMIT.txt
+          printf '%s\n' 'https://github.com/onurtuncer/Aetherion' > work/f16-aetherion/SOURCE_URL.txt
+          find work/f16-aetherion -type f -print0 | sort -z | xargs -0 sha256sum > work/f16-aetherion/FILE_SHA256SUMS
+          tar --sort=name --mtime='UTC 1980-01-01' --owner=0 --group=0 --numeric-owner \
+            -cJf output/f16-s119-aetherion-b0efbc0.tar.xz -C work f16-aetherion
+
+          # NASA SimuPy-Flight mirror: model package plus F-16 atmospheric reference datasets.
+          simupy_commit='70754e6916afc206e8c0abb386d1a9c98bf8f561'
+          git clone --quiet --filter=blob:none --no-checkout https://github.com/nasa/simupy-flight.git work/simupy-flight
+          git -C work/simupy-flight checkout --quiet "$simupy_commit"
+          test "$(git -C work/simupy-flight rev-parse HEAD)" = "$simupy_commit"
+          mkdir -p work/f16-simupy/NESC_data/All_models work/f16-simupy/NESC_data/Atmospheric_checkcases work/f16-simupy/nesc_test_cases
+          cp -a work/simupy-flight/NESC_data/All_models/F16_package work/f16-simupy/NESC_data/All_models/
+          while IFS= read -r path; do
+            cp -a "$path" work/f16-simupy/NESC_data/Atmospheric_checkcases/
+          done < <(find work/simupy-flight/NESC_data/Atmospheric_checkcases -mindepth 1 -maxdepth 1 -type d \
+            \( -name 'Atmos_11_*' -o -name 'Atmos_13p1_*' -o -name 'Atmos_13p2_*' -o -name 'Atmos_13p3_*' -o -name 'Atmos_13p4_*' -o -name 'Atmos_15_*' -o -name 'Atmos_16_*' \) | sort)
+          find work/simupy-flight/nesc_test_cases -maxdepth 1 -type f \
+            \( -name 'F16*.py' -o -name 'nesc_case11.py' -o -name 'nesc_case13p*.py' -o -name 'nesc_case15.py' -o -name 'nesc_case16.py' -o -name 'nesc_testcase_helper.py' -o -name 'process_NESC_DaveML.py' \) \
+            -exec cp -a {} work/f16-simupy/nesc_test_cases/ \;
+          cp -a work/simupy-flight/license.pdf work/f16-simupy/ 2>/dev/null || true
+          printf '%s\n' "$simupy_commit" > work/f16-simupy/SOURCE_COMMIT.txt
+          printf '%s\n' 'https://github.com/nasa/simupy-flight' > work/f16-simupy/SOURCE_URL.txt
+          find work/f16-simupy -type f -print0 | sort -z | xargs -0 sha256sum > work/f16-simupy/FILE_SHA256SUMS
+          tar --sort=name --mtime='UTC 1980-01-01' --owner=0 --group=0 --numeric-owner \
+            -cJf output/f16-nesc-simupy-70754e6.tar.xz -C work f16-simupy
+
+          # Exact OpenAP 2.6.0 source distribution and complete bundled model-data tree.
+          openap_url='https://files.pythonhosted.org/packages/cc/3e/ee62c66def7c570d1aec06e6e0e04c46492028d7ae4c135ab24aa8ce4978/openap-2.6.0.tar.gz'
+          openap_sha='be47e75c5ade7c56b9476fbf45d506a385ed3abfc2185197da6ee7e20ea8ada3'
+          curl --fail --location --retry 5 --retry-all-errors "$openap_url" -o output/openap-2.6.0.tar.gz
+          echo "$openap_sha  output/openap-2.6.0.tar.gz" | sha256sum -c -
+          mkdir -p work/openap-extracted
+          tar -xzf output/openap-2.6.0.tar.gz -C work/openap-extracted
+          openap_root="$(find work/openap-extracted -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          mkdir -p work/openap-data-2.6.0
+          cp -a "$openap_root/openap/data" work/openap-data-2.6.0/
+          cp -a "$openap_root/LICENSE" work/openap-data-2.6.0/ 2>/dev/null || true
+          cp -a "$openap_root/README.md" work/openap-data-2.6.0/ 2>/dev/null || true
+          printf '%s\n' '2.6.0' > work/openap-data-2.6.0/SOURCE_VERSION.txt
+          printf '%s\n' "$openap_url" > work/openap-data-2.6.0/SOURCE_URL.txt
+          printf '%s\n' "$openap_sha" > work/openap-data-2.6.0/SOURCE_SDIST_SHA256.txt
+          find work/openap-data-2.6.0 -type f -print0 | sort -z | xargs -0 sha256sum > work/openap-data-2.6.0/FILE_SHA256SUMS
+          tar --sort=name --mtime='UTC 1980-01-01' --owner=0 --group=0 --numeric-owner \
+            -cJf output/openap-2.6.0-model-data.tar.xz -C work openap-data-2.6.0
+
+          (cd output && sha256sum * > SHA256SUMS)
+          (cd output && find . -maxdepth 1 -type f -printf '%f\t%s\n' | sort > FILE_INVENTORY.tsv)
+
+      - name: Upload exact source bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: aerospace-source-bundles
+          path: output/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
