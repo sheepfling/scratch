@@ -1,0 +1,67 @@
+name: JSBSim data transport
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  collect-model-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out transport branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Fetch pinned JSBSim v1.3.1 model corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_commit='3b25f25e49b42d0489c04ac805674fc1450ca579'
+          git clone --quiet --filter=blob:none --no-checkout https://github.com/JSBSim-Team/jsbsim.git upstream-jsbsim
+          git -C upstream-jsbsim checkout --quiet "$expected_commit"
+          actual_commit="$(git -C upstream-jsbsim rev-parse HEAD)"
+          test "$actual_commit" = "$expected_commit"
+
+          mkdir -p bundle/jsbsim-v1.3.1
+          for path in aircraft engine systems scripts; do
+            if test -e "upstream-jsbsim/$path"; then
+              cp -a "upstream-jsbsim/$path" "bundle/jsbsim-v1.3.1/"
+            fi
+          done
+          for path in COPYING README.md; do
+            if test -f "upstream-jsbsim/$path"; then
+              cp -a "upstream-jsbsim/$path" "bundle/jsbsim-v1.3.1/"
+            fi
+          done
+          if test -f upstream-jsbsim/matlab/LICENSE.txt; then
+            mkdir -p bundle/jsbsim-v1.3.1/matlab
+            cp upstream-jsbsim/matlab/LICENSE.txt bundle/jsbsim-v1.3.1/matlab/
+          fi
+
+          printf '%s\n' "$actual_commit" > bundle/jsbsim-v1.3.1/SOURCE_COMMIT.txt
+          printf '%s\n' 'refs/tags/v1.3.1' > bundle/jsbsim-v1.3.1/SOURCE_TAG.txt
+          printf '%s\n' 'https://github.com/JSBSim-Team/jsbsim' > bundle/jsbsim-v1.3.1/SOURCE_URL.txt
+          find bundle/jsbsim-v1.3.1 -type f -print0 | sort -z | xargs -0 sha256sum > bundle/jsbsim-v1.3.1/FILE_SHA256SUMS
+          find bundle/jsbsim-v1.3.1 -type f -printf '%P\t%s\n' | sort > bundle/jsbsim-v1.3.1/FILE_INVENTORY.tsv
+
+          tar --sort=name --mtime='UTC 1980-01-01' --owner=0 --group=0 --numeric-owner \
+            -cJf jsbsim-v1.3.1-model-data.tar.xz -C bundle jsbsim-v1.3.1
+          sha256sum jsbsim-v1.3.1-model-data.tar.xz > SHA256SUMS
+          wc -c jsbsim-v1.3.1-model-data.tar.xz > ARCHIVE_SIZE.txt
+
+      - name: Upload pinned model corpus
+        uses: actions/upload-artifact@v4
+        with:
+          name: jsbsim-v1.3.1-model-data
+          path: |
+            jsbsim-v1.3.1-model-data.tar.xz
+            SHA256SUMS
+            ARCHIVE_SIZE.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
