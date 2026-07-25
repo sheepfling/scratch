@@ -1,0 +1,148 @@
+name: DAVE-ML NESC resource transport
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out transport branch
+        uses: actions/checkout@v4
+
+      - name: Collect official DAVE-ML and NASA/NESC resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/taoryx-daveml-nesc-resources-v1.0"
+          mkdir -p \
+            "$ROOT/raw/daveml/examples" \
+            "$ROOT/raw/daveml/schema" \
+            "$ROOT/raw/nesc/official" \
+            "$ROOT/raw/nesc/pinned-simupy-flight" \
+            "$ROOT/reference"
+
+          fetch() {
+            local url="$1"
+            local out="$2"
+            echo "Downloading $url"
+            curl --fail --location --retry 6 --retry-all-errors --connect-timeout 30 \
+              --user-agent 'Taoryx resource catalog builder' \
+              "$url" --output "$out"
+          }
+
+          fetch 'https://nescacademy.nasa.gov/src/flightsim/Models/All_models.zip' \
+            "$ROOT/raw/nesc/official/All_models.zip"
+          fetch 'https://nescacademy.nasa.gov/src/flightsim/Scenarios/Initial_Conditions.xlsx' \
+            "$ROOT/raw/nesc/official/Initial_Conditions.xlsx"
+          fetch 'https://nescacademy.nasa.gov/src/flightsim/Datasets/Atmospheric_checkcases.zip' \
+            "$ROOT/raw/nesc/official/Atmospheric_checkcases.zip"
+          fetch 'https://nescacademy.nasa.gov/src/flightsim/Datasets/Orbital_checkcases.zip' \
+            "$ROOT/raw/nesc/official/Orbital_checkcases.zip"
+          fetch 'https://nescacademy.nasa.gov/flightsim/2015' \
+            "$ROOT/raw/nesc/official/NESC-2015-index.html"
+
+          fetch 'https://www.daveml.org/examples/index.html' \
+            "$ROOT/raw/daveml/examples/index.html"
+          fetch 'https://www.daveml.org/examples/simple_aero.dml' \
+            "$ROOT/raw/daveml/examples/simple_aero.dml"
+          fetch 'https://www.daveml.org/examples/twoD_table.dml' \
+            "$ROOT/raw/daveml/examples/twoD_table.dml"
+          fetch 'https://www.daveml.org/examples/twoD_ungridded.dml' \
+            "$ROOT/raw/daveml/examples/twoD_ungridded.dml"
+          fetch 'https://www.daveml.org/examples/threeD_ungridded.dml' \
+            "$ROOT/raw/daveml/examples/threeD_ungridded.dml"
+          fetch 'https://www.daveml.org/examples/atmos_76.dml' \
+            "$ROOT/raw/daveml/examples/atmos_76.dml"
+          fetch 'https://www.daveml.org/examples/F16_aero.dml' \
+            "$ROOT/raw/daveml/examples/F16_aero.dml"
+          fetch 'https://www.daveml.org/examples/HL20_aero.dml.gz' \
+            "$ROOT/raw/daveml/examples/HL20_aero.dml.gz"
+          gzip -dc "$ROOT/raw/daveml/examples/HL20_aero.dml.gz" \
+            > "$ROOT/raw/daveml/examples/HL20_aero.dml"
+          fetch 'https://www.daveml.org/DTDs/2p0p2/DAVEfunc.dtd' \
+            "$ROOT/raw/daveml/schema/DAVEfunc-2.0.2.dtd"
+          fetch 'https://www.daveml.org/DTDs/2p0p2/DAVE-ML_ref.pdf' \
+            "$ROOT/raw/daveml/schema/DAVE-ML-2.0.2-reference.pdf"
+
+          SIMUPY_SHA='70754e6916afc206e8c0abb386d1a9c98bf8f561'
+          fetch "https://codeload.github.com/nasa/simupy-flight/zip/$SIMUPY_SHA" \
+            "$RUNNER_TEMP/simupy-flight.zip"
+          unzip -q "$RUNNER_TEMP/simupy-flight.zip" -d "$RUNNER_TEMP/simupy-flight"
+          SRC="$RUNNER_TEMP/simupy-flight/simupy-flight-$SIMUPY_SHA"
+          cp "$SRC/README.rst" "$ROOT/raw/nesc/pinned-simupy-flight/README.rst"
+          cp "$SRC/license.pdf" "$ROOT/raw/nesc/pinned-simupy-flight/NASA-OSA-1.3-license.pdf"
+          cp -R "$SRC/nesc_test_cases" "$ROOT/raw/nesc/pinned-simupy-flight/"
+          find "$ROOT/raw/nesc/pinned-simupy-flight" -type d -name '__pycache__' -prune -exec rm -rf '{}' + || true
+
+          cat > "$ROOT/reference/SOURCES.md" <<'EOF'
+          # Sources
+
+          ## NASA/NESC 2015 six-degree-of-freedom check cases
+
+          - https://nescacademy.nasa.gov/flightsim/2015
+          - official all-model archive
+          - official initial-condition workbook
+          - official atmospheric trajectory archive
+          - official orbital trajectory archive
+
+          ## DAVE-ML
+
+          - https://www.daveml.org/examples/index.html
+          - DAVEfunc 2.0.2 DTD and reference manual
+
+          ## NASA simupy-flight snapshot
+
+          - repository: https://github.com/nasa/simupy-flight
+          - commit: 70754e6916afc206e8c0abb386d1a9c98bf8f561
+          - selected paths: nesc_test_cases/, README.rst, license.pdf
+          EOF
+
+          python - "$ROOT" <<'PY'
+          from __future__ import annotations
+          import csv
+          import hashlib
+          import sys
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          root = Path(sys.argv[1])
+          rows = []
+          for path in sorted(p for p in root.rglob('*') if p.is_file()):
+              rel = path.relative_to(root).as_posix()
+              h = hashlib.sha256(path.read_bytes()).hexdigest()
+              rows.append((rel, path.stat().st_size, h))
+          with (root / 'reference/resource-files.tsv').open('w', encoding='utf-8', newline='') as fh:
+              writer = csv.writer(fh, delimiter='\t')
+              writer.writerow(['path', 'size_bytes', 'sha256'])
+              writer.writerows(rows)
+          with (root / 'checksums.sha256').open('w', encoding='utf-8') as fh:
+              for rel, _, h in rows:
+                  if rel != 'checksums.sha256':
+                      fh.write(f'{h}  {rel}\n')
+          for archive in [
+              root / 'raw/nesc/official/All_models.zip',
+              root / 'raw/nesc/official/Atmospheric_checkcases.zip',
+              root / 'raw/nesc/official/Orbital_checkcases.zip',
+          ]:
+              with ZipFile(archive) as zf:
+                  if zf.testzip() is not None:
+                      raise SystemExit(f'Bad ZIP member in {archive}')
+          PY
+
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/taoryx-daveml-nesc-resources-v1.0.tar.gz" \
+            'taoryx-daveml-nesc-resources-v1.0'
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+
+      - name: Upload resource artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: taoryx-daveml-nesc-resources-v1.0
+          path: ${{ env.ROOT }}
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 1
