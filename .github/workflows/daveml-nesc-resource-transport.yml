@@ -24,24 +24,21 @@ jobs:
             "$ROOT/raw/daveml/examples" \
             "$ROOT/raw/daveml/schema" \
             "$ROOT/raw/nesc/pinned-simupy-flight" \
+            "$ROOT/raw/nesc/official" \
             "$ROOT/reference"
 
           SIMUPY_SHA='70754e6916afc206e8c0abb386d1a9c98bf8f561'
-          git clone --depth 1 --filter=blob:none --no-checkout \
-            https://github.com/nasa/simupy-flight.git "$RUNNER_TEMP/simupy-flight"
-          git -C "$RUNNER_TEMP/simupy-flight" fetch --depth 1 origin "$SIMUPY_SHA"
-          git -C "$RUNNER_TEMP/simupy-flight" sparse-checkout init --cone
-          git -C "$RUNNER_TEMP/simupy-flight" sparse-checkout set NESC_data nesc_test_cases README.rst license.pdf
-          git -C "$RUNNER_TEMP/simupy-flight" checkout --detach "$SIMUPY_SHA"
-          SRC="$RUNNER_TEMP/simupy-flight"
+          curl --fail --location --retry 4 --retry-all-errors --max-time 900 \
+            "https://codeload.github.com/nasa/simupy-flight/zip/$SIMUPY_SHA" \
+            --output "$RUNNER_TEMP/simupy-flight.zip"
+          unzip -q "$RUNNER_TEMP/simupy-flight.zip" -d "$RUNNER_TEMP/simupy-flight"
+          SRC="$RUNNER_TEMP/simupy-flight/simupy-flight-$SIMUPY_SHA"
           cp -R "$SRC/NESC_data" "$ROOT/raw/nesc/pinned-simupy-flight/"
           cp -R "$SRC/nesc_test_cases" "$ROOT/raw/nesc/pinned-simupy-flight/"
           cp "$SRC/README.rst" "$ROOT/raw/nesc/pinned-simupy-flight/README.rst"
           cp "$SRC/license.pdf" "$ROOT/raw/nesc/pinned-simupy-flight/NASA-OSA-1.3-license.pdf"
           find "$ROOT/raw/nesc/pinned-simupy-flight" -type d -name '__pycache__' -prune -exec rm -rf '{}' + || true
 
-          # Materialize a compatible raw/nesc/official view from the pinned NASA mirror.
-          mkdir -p "$ROOT/raw/nesc/official"
           if [[ -d "$SRC/NESC_data/All_models" ]]; then
             (cd "$SRC/NESC_data" && zip -qr "$ROOT/raw/nesc/official/All_models.zip" All_models)
           fi
@@ -51,7 +48,7 @@ jobs:
           if [[ -d "$SRC/NESC_data/Orbital_checkcases" ]]; then
             (cd "$SRC/NESC_data" && zip -qr "$ROOT/raw/nesc/official/Orbital_checkcases.zip" Orbital_checkcases)
           fi
-          INITIAL="$(find "$SRC/NESC_data" -maxdepth 2 -type f -iname '*initial*condition*.xlsx' | head -n 1 || true)"
+          INITIAL="$(find "$SRC/NESC_data" -maxdepth 3 -type f -iname '*initial*condition*.xlsx' | head -n 1 || true)"
           [[ -n "$INITIAL" ]] && cp "$INITIAL" "$ROOT/raw/nesc/official/Initial_Conditions.xlsx"
 
           fetch_optional() {
@@ -60,15 +57,13 @@ jobs:
             if curl --fail --location --retry 2 --retry-all-errors --max-time 120 \
               --user-agent 'Taoryx resource catalog builder' "$url" --output "$out"; then
               printf 'ok\t%s\t%s\n' "$url" "${out#$ROOT/}" >> "$ROOT/reference/download-status.tsv"
-              return 0
+            else
+              rm -f "$out"
+              printf 'unavailable\t%s\t%s\n' "$url" "${out#$ROOT/}" >> "$ROOT/reference/download-status.tsv"
             fi
-            rm -f "$out"
-            printf 'unavailable\t%s\t%s\n' "$url" "${out#$ROOT/}" >> "$ROOT/reference/download-status.tsv"
-            return 0
           }
           printf 'status\turl\tpath\n' > "$ROOT/reference/download-status.tsv"
 
-          # Prefer exact files in the pinned NASA model tree when present.
           F16="$(find "$SRC/NESC_data/All_models" -type f -iname 'F16_aero.dml' | head -n 1 || true)"
           [[ -n "$F16" ]] && cp "$F16" "$ROOT/raw/daveml/examples/F16_aero.dml"
           ATMOS="$(find "$SRC" -type f -iname 'atmos_76.dml' | head -n 1 || true)"
@@ -87,30 +82,22 @@ jobs:
           fetch_optional 'http://daveml.org/examples/threeD_ungridded.dml' \
             "$ROOT/raw/daveml/examples/threeD_ungridded.dml"
           fetch_optional 'https://www.daveml.org/DTDs/2p0/DAVEfunc.dtd' \
-            "$ROOT/raw/daveml/schema/DAVEfunc-2.0.2-family.dtd"
+            "$ROOT/raw/daveml/schema/DAVEfunc-2.0-family.dtd"
           fetch_optional 'https://www.daveml.org/DTDs/2p0p2/DAVEfunc.dtd' \
             "$ROOT/raw/daveml/schema/DAVEfunc-2.0.2.dtd"
 
           cat > "$ROOT/reference/SOURCES.md" <<'EOF'
           # Sources
 
-          ## NASA/NESC resources
+          - NASA/NESC official site: https://nescacademy.nasa.gov/flightsim/2015
+          - Pinned NASA mirror: https://github.com/nasa/simupy-flight
+          - Pinned commit: 70754e6916afc206e8c0abb386d1a9c98bf8f561
+          - DAVE-ML examples: https://www.daveml.org/examples/index.html
 
-          - Official site: https://nescacademy.nasa.gov/flightsim/2015
-          - Pinned NASA repository mirror: https://github.com/nasa/simupy-flight
-          - Commit: 70754e6916afc206e8c0abb386d1a9c98bf8f561
-
-          The resource bundle retains the complete `NESC_data` and `nesc_test_cases`
-          trees from this pinned NASA repository. ZIP views are generated without
-          changing the member bytes so downstream tooling can consume the same
-          archive-oriented layout used by the official site.
-
-          ## DAVE-ML
-
-          - Official examples: https://www.daveml.org/examples/index.html
-          - Large HL-20 and atmosphere mirrors are pinned from DyadLang/DyadDemos.
-          - F-16 is copied from the pinned NASA/NESC model tree.
-          - Smaller conformance examples and DTDs are fetched from daveml.org when available.
+          The bundle retains the complete `NESC_data` and `nesc_test_cases` trees
+          from the pinned NASA repository. ZIP views are generated from those exact
+          mirrored member bytes. The direct DAVE-ML example files are retained when
+          available from their official or pinned public mirrors.
           EOF
 
           python - "$ROOT" <<'PY'
@@ -137,16 +124,15 @@ jobs:
           rows = []
           for path in sorted(p for p in root.rglob('*') if p.is_file()):
               rel = path.relative_to(root).as_posix()
-              h = hashlib.sha256(path.read_bytes()).hexdigest()
-              rows.append((rel, path.stat().st_size, h))
+              rows.append((rel, path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest()))
           with (root / 'reference/resource-files.tsv').open('w', encoding='utf-8', newline='') as fh:
               writer = csv.writer(fh, delimiter='\t')
               writer.writerow(['path', 'size_bytes', 'sha256'])
               writer.writerows(rows)
           with (root / 'checksums.sha256').open('w', encoding='utf-8') as fh:
-              for rel, _, h in rows:
+              for rel, _, digest in rows:
                   if rel != 'checksums.sha256':
-                      fh.write(f'{h}  {rel}\n')
+                      fh.write(f'{digest}  {rel}\n')
           PY
 
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
