@@ -1,0 +1,120 @@
+name: DAVE-ML and NESC resource bundle
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out transport branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Collect official and pinned resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$PWD/bundle"
+          mkdir -p \
+            "$root/nesc/official-downloads" \
+            "$root/nesc/pinned-simupy-flight" \
+            "$root/daveml/examples" \
+            "$root/daveml/schema" \
+            "$root/provenance"
+
+          curl_common=(--fail --location --retry 5 --retry-all-errors --connect-timeout 30)
+
+          # NASA/NESC official aggregate downloads.
+          curl "${curl_common[@]}" \
+            'https://nescacademy.nasa.gov/src/flightsim/Models/All_models.zip' \
+            -o "$root/nesc/official-downloads/All_models.zip"
+          curl "${curl_common[@]}" \
+            'https://nescacademy.nasa.gov/src/flightsim/Scenarios/Initial_Conditions.xlsx' \
+            -o "$root/nesc/official-downloads/Initial_Conditions.xlsx"
+          curl "${curl_common[@]}" \
+            'https://nescacademy.nasa.gov/src/flightsim/Datasets/Atmospheric_checkcases.zip' \
+            -o "$root/nesc/official-downloads/Atmospheric_checkcases.zip"
+          curl "${curl_common[@]}" \
+            'https://nescacademy.nasa.gov/src/flightsim/Datasets/Orbital_checkcases.zip' \
+            -o "$root/nesc/official-downloads/Orbital_checkcases.zip"
+
+          # Pinned NASA simupy-flight snapshot, used to identify exact repository paths.
+          simupy_commit='70754e6916afc206e8c0abb386d1a9c98bf8f561'
+          curl "${curl_common[@]}" \
+            "https://codeload.github.com/nasa/simupy-flight/zip/$simupy_commit" \
+            -o "$root/provenance/simupy-flight-$simupy_commit.zip"
+          unzip -q "$root/provenance/simupy-flight-$simupy_commit.zip" -d "$root/provenance/simupy-flight-extract"
+          simupy_dir="$root/provenance/simupy-flight-extract/simupy-flight-$simupy_commit"
+          cp -a "$simupy_dir/NESC_data/All_models/." "$root/nesc/pinned-simupy-flight/"
+          cp "$simupy_dir/license.pdf" "$root/nesc/pinned-simupy-flight/NASA-OSA-1.3-license.pdf"
+          cp "$simupy_dir/README.rst" "$root/nesc/pinned-simupy-flight/simupy-flight-README.rst"
+          rm -rf "$root/provenance/simupy-flight-extract"
+
+          # Official DAVE-ML examples.
+          for name in \
+            simple_aero.dml \
+            twoD_table.dml \
+            twoD_ungridded.dml \
+            threeD_ungridded.dml \
+            atmos_76.dml \
+            F16_aero.dml
+          do
+            curl "${curl_common[@]}" \
+              "https://www.daveml.org/examples/$name" \
+              -o "$root/daveml/examples/$name"
+          done
+          curl "${curl_common[@]}" \
+            'https://www.daveml.org/examples/HL20_aero.dml.gz' \
+            -o "$root/daveml/examples/HL20_aero.dml.gz"
+          gzip -dc "$root/daveml/examples/HL20_aero.dml.gz" \
+            > "$root/daveml/examples/HL20_aero.dml"
+
+          # Normative DAVEfunc 2.0.2 DTD and reference manual.
+          curl "${curl_common[@]}" \
+            'https://www.daveml.org/DTDs/2p0p2/DAVEfunc.dtd' \
+            -o "$root/daveml/schema/DAVEfunc-2.0.2.dtd"
+          curl "${curl_common[@]}" \
+            'https://www.daveml.org/DTDs/2p0p2/DAVE-ML_ref.pdf' \
+            -o "$root/daveml/schema/DAVE-ML-2.0.2-reference.pdf"
+
+          cat > "$root/provenance/SOURCES.md" <<'EOF'
+          # Resource sources
+
+          ## NASA/NESC 2015 flight-simulation check cases
+
+          - https://nescacademy.nasa.gov/flightsim/2015
+          - https://nescacademy.nasa.gov/src/flightsim/Models/All_models.zip
+          - https://nescacademy.nasa.gov/src/flightsim/Scenarios/Initial_Conditions.xlsx
+          - https://nescacademy.nasa.gov/src/flightsim/Datasets/Atmospheric_checkcases.zip
+          - https://nescacademy.nasa.gov/src/flightsim/Datasets/Orbital_checkcases.zip
+
+          ## Pinned NASA simupy-flight snapshot
+
+          - Repository: https://github.com/nasa/simupy-flight
+          - Commit: 70754e6916afc206e8c0abb386d1a9c98bf8f561
+          - License: NASA Open Source Agreement 1.3, copied from the repository
+
+          ## DAVE-ML
+
+          - Examples: https://www.daveml.org/examples/index.html
+          - DTD index: https://www.daveml.org/DTDs/index.html
+          - DAVEfunc DTD: 2.0.2
+          EOF
+
+          find "$root" -type f -print0 | sort -z | xargs -0 sha256sum > "$root/SHA256SUMS"
+          find "$root" -type f -printf '%P\t%s\n' | sort > "$root/FILE_SIZES.tsv"
+
+      - name: Upload collected resource bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: daveml-nesc-resource-bundle
+          path: bundle
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 1
