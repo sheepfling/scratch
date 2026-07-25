@@ -29,34 +29,52 @@ jobs:
             "$root/provenance"
 
           curl_common=(--fail --location --retry 5 --retry-all-errors --connect-timeout 30)
+          : > "$root/provenance/DOWNLOAD_STATUS.tsv"
 
-          # NASA/NESC official aggregate downloads.
-          curl "${curl_common[@]}" \
-            'https://nescacademy.nasa.gov/src/flightsim/Models/All_models.zip' \
-            -o "$root/nesc/official-downloads/All_models.zip"
-          curl "${curl_common[@]}" \
-            'https://nescacademy.nasa.gov/src/flightsim/Scenarios/Initial_Conditions.xlsx' \
-            -o "$root/nesc/official-downloads/Initial_Conditions.xlsx"
-          curl "${curl_common[@]}" \
-            'https://nescacademy.nasa.gov/src/flightsim/Datasets/Atmospheric_checkcases.zip' \
-            -o "$root/nesc/official-downloads/Atmospheric_checkcases.zip"
-          curl "${curl_common[@]}" \
-            'https://nescacademy.nasa.gov/src/flightsim/Datasets/Orbital_checkcases.zip' \
-            -o "$root/nesc/official-downloads/Orbital_checkcases.zip"
+          optional_download() {
+            local url="$1"
+            local output="$2"
+            if curl "${curl_common[@]}" "$url" -o "$output"; then
+              printf 'ok\t%s\t%s\n' "$url" "${output#"$root/"}" >> "$root/provenance/DOWNLOAD_STATUS.tsv"
+            else
+              rm -f "$output"
+              printf 'failed\t%s\t%s\n' "$url" "${output#"$root/"}" >> "$root/provenance/DOWNLOAD_STATUS.tsv"
+            fi
+          }
 
-          # Pinned NASA simupy-flight snapshot, used to identify exact repository paths.
+          # Pinned NASA simupy-flight snapshot. This is the reproducible core and
+          # includes all NESC models, initial-condition data, participant
+          # trajectories, and scenario scripts carried by the repository.
           simupy_commit='70754e6916afc206e8c0abb386d1a9c98bf8f561'
           curl "${curl_common[@]}" \
             "https://codeload.github.com/nasa/simupy-flight/zip/$simupy_commit" \
             -o "$root/provenance/simupy-flight-$simupy_commit.zip"
           unzip -q "$root/provenance/simupy-flight-$simupy_commit.zip" -d "$root/provenance/simupy-flight-extract"
           simupy_dir="$root/provenance/simupy-flight-extract/simupy-flight-$simupy_commit"
-          cp -a "$simupy_dir/NESC_data/All_models/." "$root/nesc/pinned-simupy-flight/"
+          cp -a "$simupy_dir/NESC_data" "$root/nesc/pinned-simupy-flight/"
+          cp -a "$simupy_dir/nesc_test_cases" "$root/nesc/pinned-simupy-flight/"
           cp "$simupy_dir/license.pdf" "$root/nesc/pinned-simupy-flight/NASA-OSA-1.3-license.pdf"
           cp "$simupy_dir/README.rst" "$root/nesc/pinned-simupy-flight/simupy-flight-README.rst"
           rm -rf "$root/provenance/simupy-flight-extract"
 
-          # Official DAVE-ML examples.
+          # NASA/NESC official aggregate downloads are mirrored when the site
+          # accepts automated retrieval. The pinned repository snapshot remains
+          # complete even when one of these convenience archives is unavailable.
+          optional_download \
+            'https://nescacademy.nasa.gov/src/flightsim/Models/All_models.zip' \
+            "$root/nesc/official-downloads/All_models.zip"
+          optional_download \
+            'https://nescacademy.nasa.gov/src/flightsim/Scenarios/Initial_Conditions.xlsx' \
+            "$root/nesc/official-downloads/Initial_Conditions.xlsx"
+          optional_download \
+            'https://nescacademy.nasa.gov/src/flightsim/Datasets/Atmospheric_checkcases.zip' \
+            "$root/nesc/official-downloads/Atmospheric_checkcases.zip"
+          optional_download \
+            'https://nescacademy.nasa.gov/src/flightsim/Datasets/Orbital_checkcases.zip' \
+            "$root/nesc/official-downloads/Orbital_checkcases.zip"
+
+          # Official DAVE-ML examples. A failed convenience download is recorded;
+          # F-16 and HL-20 are also present in pinned NASA/Dyad sources elsewhere.
           for name in \
             simple_aero.dml \
             twoD_table.dml \
@@ -65,23 +83,24 @@ jobs:
             atmos_76.dml \
             F16_aero.dml
           do
-            curl "${curl_common[@]}" \
+            optional_download \
               "https://www.daveml.org/examples/$name" \
-              -o "$root/daveml/examples/$name"
+              "$root/daveml/examples/$name"
           done
-          curl "${curl_common[@]}" \
+          optional_download \
             'https://www.daveml.org/examples/HL20_aero.dml.gz' \
-            -o "$root/daveml/examples/HL20_aero.dml.gz"
-          gzip -dc "$root/daveml/examples/HL20_aero.dml.gz" \
-            > "$root/daveml/examples/HL20_aero.dml"
+            "$root/daveml/examples/HL20_aero.dml.gz"
+          if [[ -f "$root/daveml/examples/HL20_aero.dml.gz" ]]; then
+            gzip -dc "$root/daveml/examples/HL20_aero.dml.gz" > "$root/daveml/examples/HL20_aero.dml"
+          fi
 
           # Normative DAVEfunc 2.0.2 DTD and reference manual.
-          curl "${curl_common[@]}" \
+          optional_download \
             'https://www.daveml.org/DTDs/2p0p2/DAVEfunc.dtd' \
-            -o "$root/daveml/schema/DAVEfunc-2.0.2.dtd"
-          curl "${curl_common[@]}" \
+            "$root/daveml/schema/DAVEfunc-2.0.2.dtd"
+          optional_download \
             'https://www.daveml.org/DTDs/2p0p2/DAVE-ML_ref.pdf' \
-            -o "$root/daveml/schema/DAVE-ML-2.0.2-reference.pdf"
+            "$root/daveml/schema/DAVE-ML-2.0.2-reference.pdf"
 
           cat > "$root/provenance/SOURCES.md" <<'EOF'
           # Resource sources
@@ -99,6 +118,7 @@ jobs:
           - Repository: https://github.com/nasa/simupy-flight
           - Commit: 70754e6916afc206e8c0abb386d1a9c98bf8f561
           - License: NASA Open Source Agreement 1.3, copied from the repository
+          - Included paths: NESC_data/ and nesc_test_cases/
 
           ## DAVE-ML
 
@@ -111,6 +131,7 @@ jobs:
           find "$root" -type f -printf '%P\t%s\n' | sort > "$root/FILE_SIZES.tsv"
 
       - name: Upload collected resource bundle
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: daveml-nesc-resource-bundle
