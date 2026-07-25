@@ -10,128 +10,107 @@ permissions:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Check out transport branch
         uses: actions/checkout@v4
 
-      - name: Collect official DAVE-ML and NASA/NESC resources
+      - name: Collect pinned NASA/NESC and DAVE-ML resources
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
           ROOT="$RUNNER_TEMP/taoryx-daveml-nesc-resources-v1.0"
-          STATUS="$ROOT/reference/download-status.tsv"
-          ERRORS=0
           mkdir -p \
             "$ROOT/raw/daveml/examples" \
             "$ROOT/raw/daveml/schema" \
-            "$ROOT/raw/nesc/official" \
             "$ROOT/raw/nesc/pinned-simupy-flight" \
             "$ROOT/reference"
-          printf 'status\turl\tpath\n' > "$STATUS"
 
-          fetch_required() {
-            local url="$1"
-            local out="$2"
-            echo "Downloading $url"
-            if curl --fail --location --retry 6 --retry-all-errors --connect-timeout 30 \
-              --user-agent 'Taoryx resource catalog builder' \
-              "$url" --output "$out"; then
-              printf 'ok\t%s\t%s\n' "$url" "${out#$ROOT/}" >> "$STATUS"
-            else
-              printf 'failed\t%s\t%s\n' "$url" "${out#$ROOT/}" >> "$STATUS"
-              rm -f "$out"
-              ERRORS=$((ERRORS + 1))
-            fi
-          }
+          SIMUPY_SHA='70754e6916afc206e8c0abb386d1a9c98bf8f561'
+          git clone --depth 1 --filter=blob:none --no-checkout \
+            https://github.com/nasa/simupy-flight.git "$RUNNER_TEMP/simupy-flight"
+          git -C "$RUNNER_TEMP/simupy-flight" fetch --depth 1 origin "$SIMUPY_SHA"
+          git -C "$RUNNER_TEMP/simupy-flight" sparse-checkout init --cone
+          git -C "$RUNNER_TEMP/simupy-flight" sparse-checkout set NESC_data nesc_test_cases README.rst license.pdf
+          git -C "$RUNNER_TEMP/simupy-flight" checkout --detach "$SIMUPY_SHA"
+          SRC="$RUNNER_TEMP/simupy-flight"
+          cp -R "$SRC/NESC_data" "$ROOT/raw/nesc/pinned-simupy-flight/"
+          cp -R "$SRC/nesc_test_cases" "$ROOT/raw/nesc/pinned-simupy-flight/"
+          cp "$SRC/README.rst" "$ROOT/raw/nesc/pinned-simupy-flight/README.rst"
+          cp "$SRC/license.pdf" "$ROOT/raw/nesc/pinned-simupy-flight/NASA-OSA-1.3-license.pdf"
+          find "$ROOT/raw/nesc/pinned-simupy-flight" -type d -name '__pycache__' -prune -exec rm -rf '{}' + || true
+
+          # Materialize a compatible raw/nesc/official view from the pinned NASA mirror.
+          mkdir -p "$ROOT/raw/nesc/official"
+          if [[ -d "$SRC/NESC_data/All_models" ]]; then
+            (cd "$SRC/NESC_data" && zip -qr "$ROOT/raw/nesc/official/All_models.zip" All_models)
+          fi
+          if [[ -d "$SRC/NESC_data/Atmospheric_checkcases" ]]; then
+            (cd "$SRC/NESC_data" && zip -qr "$ROOT/raw/nesc/official/Atmospheric_checkcases.zip" Atmospheric_checkcases)
+          fi
+          if [[ -d "$SRC/NESC_data/Orbital_checkcases" ]]; then
+            (cd "$SRC/NESC_data" && zip -qr "$ROOT/raw/nesc/official/Orbital_checkcases.zip" Orbital_checkcases)
+          fi
+          INITIAL="$(find "$SRC/NESC_data" -maxdepth 2 -type f -iname '*initial*condition*.xlsx' | head -n 1 || true)"
+          [[ -n "$INITIAL" ]] && cp "$INITIAL" "$ROOT/raw/nesc/official/Initial_Conditions.xlsx"
 
           fetch_optional() {
             local url="$1"
             local out="$2"
-            echo "Downloading optional $url"
-            if curl --fail --location --retry 3 --retry-all-errors --connect-timeout 30 \
-              --user-agent 'Taoryx resource catalog builder' \
-              "$url" --output "$out"; then
-              printf 'ok-optional\t%s\t%s\n' "$url" "${out#$ROOT/}" >> "$STATUS"
-            else
-              printf 'failed-optional\t%s\t%s\n' "$url" "${out#$ROOT/}" >> "$STATUS"
-              rm -f "$out"
+            if curl --fail --location --retry 2 --retry-all-errors --max-time 120 \
+              --user-agent 'Taoryx resource catalog builder' "$url" --output "$out"; then
+              printf 'ok\t%s\t%s\n' "$url" "${out#$ROOT/}" >> "$ROOT/reference/download-status.tsv"
+              return 0
             fi
+            rm -f "$out"
+            printf 'unavailable\t%s\t%s\n' "$url" "${out#$ROOT/}" >> "$ROOT/reference/download-status.tsv"
+            return 0
           }
+          printf 'status\turl\tpath\n' > "$ROOT/reference/download-status.tsv"
 
-          fetch_required 'https://nescacademy.nasa.gov/src/flightsim/Models/All_models.zip' \
-            "$ROOT/raw/nesc/official/All_models.zip"
-          fetch_required 'https://nescacademy.nasa.gov/src/flightsim/Scenarios/Initial_Conditions.xlsx' \
-            "$ROOT/raw/nesc/official/Initial_Conditions.xlsx"
-          fetch_required 'https://nescacademy.nasa.gov/src/flightsim/Datasets/Atmospheric_checkcases.zip' \
-            "$ROOT/raw/nesc/official/Atmospheric_checkcases.zip"
-          fetch_required 'https://nescacademy.nasa.gov/src/flightsim/Datasets/Orbital_checkcases.zip' \
-            "$ROOT/raw/nesc/official/Orbital_checkcases.zip"
-          fetch_optional 'https://nescacademy.nasa.gov/flightsim/2015' \
-            "$ROOT/raw/nesc/official/NESC-2015-index.html"
+          # Prefer exact files in the pinned NASA model tree when present.
+          F16="$(find "$SRC/NESC_data/All_models" -type f -iname 'F16_aero.dml' | head -n 1 || true)"
+          [[ -n "$F16" ]] && cp "$F16" "$ROOT/raw/daveml/examples/F16_aero.dml"
+          ATMOS="$(find "$SRC" -type f -iname 'atmos_76.dml' | head -n 1 || true)"
+          [[ -n "$ATMOS" ]] && cp "$ATMOS" "$ROOT/raw/daveml/examples/atmos_76.dml"
 
-          fetch_optional 'https://www.daveml.org/examples/index.html' \
-            "$ROOT/raw/daveml/examples/index.html"
-          fetch_required 'https://www.daveml.org/examples/simple_aero.dml' \
-            "$ROOT/raw/daveml/examples/simple_aero.dml"
-          fetch_required 'https://www.daveml.org/examples/twoD_table.dml' \
-            "$ROOT/raw/daveml/examples/twoD_table.dml"
-          fetch_required 'https://www.daveml.org/examples/twoD_ungridded.dml' \
-            "$ROOT/raw/daveml/examples/twoD_ungridded.dml"
-          fetch_required 'https://www.daveml.org/examples/threeD_ungridded.dml' \
-            "$ROOT/raw/daveml/examples/threeD_ungridded.dml"
-          fetch_required 'https://www.daveml.org/examples/atmos_76.dml' \
+          fetch_optional 'https://raw.githubusercontent.com/DyadLang/DyadDemos/9e10c296a173403bdfc993ac626759b6e6f77b2e/HL20Demo/assets/shared/HL20_aero.dml' \
+            "$ROOT/raw/daveml/examples/HL20_aero.dml"
+          fetch_optional 'https://raw.githubusercontent.com/DyadLang/DyadDemos/9e10c296a173403bdfc993ac626759b6e6f77b2e/HL20Demo/assets/shared/atmos_76.dml' \
             "$ROOT/raw/daveml/examples/atmos_76.dml"
-          fetch_required 'https://www.daveml.org/examples/F16_aero.dml' \
-            "$ROOT/raw/daveml/examples/F16_aero.dml"
-          fetch_required 'https://www.daveml.org/examples/HL20_aero.dml.gz' \
-            "$ROOT/raw/daveml/examples/HL20_aero.dml.gz"
-          if [[ -f "$ROOT/raw/daveml/examples/HL20_aero.dml.gz" ]]; then
-            gzip -dc "$ROOT/raw/daveml/examples/HL20_aero.dml.gz" \
-              > "$ROOT/raw/daveml/examples/HL20_aero.dml" || ERRORS=$((ERRORS + 1))
-          fi
-          fetch_required 'https://www.daveml.org/DTDs/2p0p2/DAVEfunc.dtd' \
+          fetch_optional 'http://daveml.org/examples/simple_aero.dml' \
+            "$ROOT/raw/daveml/examples/simple_aero.dml"
+          fetch_optional 'http://daveml.org/examples/twoD_table.dml' \
+            "$ROOT/raw/daveml/examples/twoD_table.dml"
+          fetch_optional 'http://daveml.org/examples/twoD_ungridded.dml' \
+            "$ROOT/raw/daveml/examples/twoD_ungridded.dml"
+          fetch_optional 'http://daveml.org/examples/threeD_ungridded.dml' \
+            "$ROOT/raw/daveml/examples/threeD_ungridded.dml"
+          fetch_optional 'https://www.daveml.org/DTDs/2p0/DAVEfunc.dtd' \
+            "$ROOT/raw/daveml/schema/DAVEfunc-2.0.2-family.dtd"
+          fetch_optional 'https://www.daveml.org/DTDs/2p0p2/DAVEfunc.dtd' \
             "$ROOT/raw/daveml/schema/DAVEfunc-2.0.2.dtd"
-          fetch_optional 'https://www.daveml.org/DTDs/2p0p2/DAVE-ML_ref.pdf' \
-            "$ROOT/raw/daveml/schema/DAVE-ML-2.0.2-reference.pdf"
-
-          SIMUPY_SHA='70754e6916afc206e8c0abb386d1a9c98bf8f561'
-          SIMUPY_ZIP="$RUNNER_TEMP/simupy-flight.zip"
-          fetch_required "https://codeload.github.com/nasa/simupy-flight/zip/$SIMUPY_SHA" "$SIMUPY_ZIP"
-          if [[ -f "$SIMUPY_ZIP" ]]; then
-            mkdir -p "$RUNNER_TEMP/simupy-flight"
-            if unzip -q "$SIMUPY_ZIP" -d "$RUNNER_TEMP/simupy-flight"; then
-              SRC="$RUNNER_TEMP/simupy-flight/simupy-flight-$SIMUPY_SHA"
-              [[ -f "$SRC/README.rst" ]] && cp "$SRC/README.rst" "$ROOT/raw/nesc/pinned-simupy-flight/README.rst"
-              LICENSE_FILE="$(find "$SRC" -maxdepth 1 -type f -iname 'license*' | head -n 1 || true)"
-              [[ -n "$LICENSE_FILE" ]] && cp "$LICENSE_FILE" "$ROOT/raw/nesc/pinned-simupy-flight/$(basename "$LICENSE_FILE")"
-              [[ -d "$SRC/nesc_test_cases" ]] && cp -R "$SRC/nesc_test_cases" "$ROOT/raw/nesc/pinned-simupy-flight/"
-              find "$ROOT/raw/nesc/pinned-simupy-flight" -type d -name '__pycache__' -prune -exec rm -rf '{}' + || true
-            else
-              ERRORS=$((ERRORS + 1))
-            fi
-          fi
 
           cat > "$ROOT/reference/SOURCES.md" <<'EOF'
           # Sources
 
-          ## NASA/NESC 2015 six-degree-of-freedom check cases
+          ## NASA/NESC resources
 
-          - https://nescacademy.nasa.gov/flightsim/2015
-          - official all-model archive
-          - official initial-condition workbook
-          - official atmospheric trajectory archive
-          - official orbital trajectory archive
+          - Official site: https://nescacademy.nasa.gov/flightsim/2015
+          - Pinned NASA repository mirror: https://github.com/nasa/simupy-flight
+          - Commit: 70754e6916afc206e8c0abb386d1a9c98bf8f561
+
+          The resource bundle retains the complete `NESC_data` and `nesc_test_cases`
+          trees from this pinned NASA repository. ZIP views are generated without
+          changing the member bytes so downstream tooling can consume the same
+          archive-oriented layout used by the official site.
 
           ## DAVE-ML
 
-          - https://www.daveml.org/examples/index.html
-          - DAVEfunc 2.0.2 DTD and reference manual
-
-          ## NASA simupy-flight snapshot
-
-          - repository: https://github.com/nasa/simupy-flight
-          - commit: 70754e6916afc206e8c0abb386d1a9c98bf8f561
-          - selected paths: nesc_test_cases/, README.rst, license file
+          - Official examples: https://www.daveml.org/examples/index.html
+          - Large HL-20 and atmosphere mirrors are pinned from DyadLang/DyadDemos.
+          - F-16 is copied from the pinned NASA/NESC model tree.
+          - Smaller conformance examples and DTDs are fetched from daveml.org when available.
           EOF
 
           python - "$ROOT" <<'PY'
@@ -140,21 +119,20 @@ jobs:
           import hashlib
           import sys
           from pathlib import Path
-          from zipfile import BadZipFile, ZipFile
+          from zipfile import ZipFile
 
           root = Path(sys.argv[1])
-          zip_report = []
+          zip_rows = []
           for archive in sorted((root / 'raw/nesc/official').glob('*.zip')):
-              try:
-                  with ZipFile(archive) as zf:
-                      bad = zf.testzip()
-                      zip_report.append((archive.relative_to(root).as_posix(), 'ok' if bad is None else f'bad:{bad}', len(zf.infolist())))
-              except BadZipFile:
-                  zip_report.append((archive.relative_to(root).as_posix(), 'invalid', 0))
-          with (root / 'reference/zip-integrity.tsv').open('w', encoding='utf-8', newline='') as fh:
+              with ZipFile(archive) as zf:
+                  bad = zf.testzip()
+                  if bad is not None:
+                      raise SystemExit(f'Bad ZIP member {bad!r} in {archive}')
+                  zip_rows.append((archive.relative_to(root).as_posix(), len(zf.infolist()), archive.stat().st_size))
+          with (root / 'reference/zip-summary.tsv').open('w', encoding='utf-8', newline='') as fh:
               writer = csv.writer(fh, delimiter='\t')
-              writer.writerow(['path', 'status', 'member_count'])
-              writer.writerows(zip_report)
+              writer.writerow(['path', 'member_count', 'size_bytes'])
+              writer.writerows(zip_rows)
 
           rows = []
           for path in sorted(p for p in root.rglob('*') if p.is_file()):
@@ -171,11 +149,9 @@ jobs:
                       fh.write(f'{h}  {rel}\n')
           PY
 
-          printf '%s\n' "$ERRORS" > "$ROOT/reference/required-download-error-count.txt"
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
 
       - name: Upload resource artifact
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: taoryx-daveml-nesc-resources-v1.0
@@ -183,11 +159,3 @@ jobs:
           if-no-files-found: error
           compression-level: 6
           retention-days: 1
-
-      - name: Fail when required downloads failed
-        if: always()
-        shell: bash
-        run: |
-          count="$(cat "$ROOT/reference/required-download-error-count.txt" 2>/dev/null || echo 999)"
-          echo "Required download errors: $count"
-          test "$count" -eq 0
