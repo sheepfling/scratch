@@ -1,0 +1,38 @@
+--- a/src/ref010/index.rs
++++ b/src/ref010/index.rs
+@@ -41,7 +41,7 @@
+ /// Exact-only Entity Type lookup.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum EntityTypeLookup {
+-    Exact(EntityTypeRecord),
++    Exact(Box<EntityTypeRecord>),
+     Ambiguous(Vec<EntityTypeRecord>),
+     Unknown(EntityTypeKey),
+ }
+@@ -56,7 +56,7 @@
+ /// Best-effort Entity Type lookup that makes every fallback explicit.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum EntityTypeResolution {
+-    Exact(EntityTypeRecord),
++    Exact(Box<EntityTypeRecord>),
+     Ambiguous(Vec<EntityTypeRecord>),
+     Fallback {
+         requested: EntityTypeKey,
+@@ -211,7 +211,7 @@
+     pub fn resolve_entity_type(&self, key: EntityTypeKey) -> EntityTypeLookup {
+         match self.entity_types.get(&key) {
+             None => EntityTypeLookup::Unknown(key),
+-            Some(records) if records.len() == 1 => EntityTypeLookup::Exact(records[0].clone()),
++            Some(records) if records.len() == 1 => EntityTypeLookup::Exact(Box::new(records[0].clone())),
+             Some(records) => EntityTypeLookup::Ambiguous(records.clone()),
+         }
+     }
+@@ -493,7 +493,7 @@
+ 
+ fn value_fits_bits(value: u64, bits: u16) -> bool {
+     match bits {
+-        1..=63 => value <= (1_u64 << u32::from(bits)) - 1,
++        1..=63 => value < (1_u64 << u32::from(bits)),
+         64 => true,
+         _ => false,
+     }
