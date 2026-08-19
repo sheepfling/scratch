@@ -29,6 +29,7 @@ jobs:
           echo "b647d97698f9ba1ebe51c7ef6305b9071e2c79464fcd8030b0aa51da7b6ea6e0  /tmp/ref010-validation-harness.tar.gz" | sha256sum --check
           tar -xzf /tmp/ref010-validation-harness.tar.gz -C .
           printf "pub mod ref010;\n" > src/lib.rs
+          patch -p1 < ref010-clippy-fixes.patch
           test -f Cargo.toml
           test -f tests/ref010_import.rs
 
